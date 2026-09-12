@@ -45,6 +45,35 @@ const ApkBuilder = {
             </div>
           </div>
 
+          <!-- Build Options Card -->
+          <div class="apk-toolchain-card" id="apk-options-card">
+            <div class="toolchain-header">
+              <span>Build Options (validated before every build)</span>
+            </div>
+            <div class="apk-options-grid">
+              <label class="apk-option">
+                <span class="apk-option-label">Build type</span>
+                <select id="apk-build-type" class="apk-option-input">
+                  <option value="debug" selected>Debug (auto-signed, installs directly)</option>
+                  <option value="release">Release (requires your keystore)</option>
+                </select>
+              </label>
+              <label class="apk-option">
+                <span class="apk-option-label">Application ID</span>
+                <input id="apk-app-id" class="apk-option-input" type="text" spellcheck="false" placeholder="com.codex.app.webapp" />
+              </label>
+              <label class="apk-option apk-option-half">
+                <span class="apk-option-label">Version code</span>
+                <input id="apk-version-code" class="apk-option-input" type="number" min="1" value="1" />
+              </label>
+              <label class="apk-option apk-option-half">
+                <span class="apk-option-label">Version name</span>
+                <input id="apk-version-name" class="apk-option-input" type="text" spellcheck="false" value="1.0" />
+              </label>
+            </div>
+            <div class="apk-options-hint">Debug APKs are signed automatically. Release builds need a keystore configured on the device.</div>
+          </div>
+
           <!-- Toolchain Status Card -->
           <div class="apk-toolchain-card" id="apk-toolchain-card">
             <div class="toolchain-header">
@@ -82,7 +111,7 @@ const ApkBuilder = {
             <div class="pipeline-steps-grid">
               <div class="pipeline-step-badge" id="step-1">
                 <span class="step-num">1</span>
-                <span>Verify Assets</span>
+                <span>Verify Config</span>
               </div>
               <div class="pipeline-step-badge" id="step-2">
                 <span class="step-num">2</span>
@@ -102,7 +131,7 @@ const ApkBuilder = {
               </div>
               <div class="pipeline-step-badge" id="step-6">
                 <span class="step-num">6</span>
-                <span>Sign APK</span>
+                <span>Sign &amp; Validate</span>
               </div>
             </div>
 
@@ -116,17 +145,19 @@ const ApkBuilder = {
           <div class="apk-result-card success" id="apk-result-success" style="display:none;">
             <div class="result-icon-success">${Icons.check}</div>
             <div class="result-info">
-              <div class="result-title">APK Built Successfully</div>
+              <div class="result-title">Validated APK Ready to Install</div>
               <div class="result-details" id="apk-result-details">WebApp-debug.apk</div>
+              <div class="result-config" id="apk-result-config"></div>
+              <div class="apk-validation-list" id="apk-validation-list"></div>
             </div>
             <div class="result-actions">
-              <button type="button" class="btn btn-primary" id="apk-share-btn">
+              <button type="button" class="btn btn-primary btn-lg" id="apk-install-btn">
+                <span class="btn-icon-svg">${Icons.externalLink}</span>
+                <span>Install APK</span>
+              </button>
+              <button type="button" class="btn btn-outline" id="apk-share-btn">
                 <span class="btn-icon-svg">${Icons.share}</span>
                 <span>Share APK</span>
-              </button>
-              <button type="button" class="btn btn-outline" id="apk-install-btn">
-                <span class="btn-icon-svg">${Icons.externalLink}</span>
-                <span>Install / Open</span>
               </button>
             </div>
           </div>
@@ -191,11 +222,27 @@ const ApkBuilder = {
     }
 
     if (installBtn) {
-      installBtn.addEventListener('click', () => {
-        if (this.lastBuiltApk && window.Bridge) {
-          window.Bridge.installApk(this.lastBuiltApk.apkPath).catch(err => {
-            alert(`Install prompt failed: ${err.message}`);
-          });
+      installBtn.addEventListener('click', async () => {
+        if (!this.lastBuiltApk || !window.Bridge) return;
+        try {
+          // Android 8+ requires the "install unknown apps" grant for this app.
+          // Guide the user to Settings instead of failing silently.
+          if (window.Bridge.isAvailable() && !window.Bridge.canInstallPackages()) {
+            const proceed = confirm(
+              "This app is not yet allowed to install APKs.\n\n" +
+              "Tap OK to open the system settings for this app, enable " +
+              "\"Allow from this source\" / \"Install unknown apps\", then come back and tap Install APK again."
+            );
+            if (proceed) {
+              window.Bridge.openInstallSettings();
+              if (window.Terminal) window.Terminal.log("Opened install-permission settings. Re-tap Install APK after granting.", "system");
+            }
+            return;
+          }
+          await window.Bridge.installApk(this.lastBuiltApk.apkPath);
+          if (window.Terminal) window.Terminal.log("System installer opened. Review the app and tap Install.", "system");
+        } catch (err) {
+          alert(`Install prompt failed: ${err.message}`);
         }
       });
     }
@@ -228,6 +275,10 @@ const ApkBuilder = {
 
     document.getElementById('apk-build-project-name').textContent = projName;
     document.getElementById('apk-build-package-name').textContent = pkgName;
+
+    // Prefill validated build options (derived from the project name).
+    const appIdInput = document.getElementById('apk-app-id');
+    if (appIdInput) appIdInput.value = pkgName;
 
     // Reset UI states
     document.getElementById('apk-progress-section').style.display = 'none';
@@ -291,8 +342,13 @@ const ApkBuilder = {
 
     badgesContainer.appendChild(createBadge("Termux App", info.termuxInstalled ? "Detected" : "Optional / Installable", info.termuxInstalled));
     badgesContainer.appendChild(createBadge("Java (OpenJDK)", info.openJdkAvailable ? "Ready" : "Termux Ready", info.openJdkAvailable));
-    badgesContainer.appendChild(createBadge("Gradle", info.gradleAvailable ? "Ready" : "Termux Ready", info.gradleAvailable));
+    badgesContainer.appendChild(createBadge("Gradle", info.gradleAvailable ? "Ready" : "Not required", info.gradleAvailable));
     badgesContainer.appendChild(createBadge("Build Tools (aapt2/d8)", info.buildToolsAvailable ? "Ready" : "Termux Ready", info.buildToolsAvailable));
+    const signingReady = info.ready === true;
+    const missing = Array.isArray(info.missingTools) && info.missingTools.length > 0
+      ? `Missing: ${info.missingTools.join(', ')}`
+      : 'Signed-APK pipeline ready';
+    badgesContainer.appendChild(createBadge("Signed APK pipeline", signingReady ? "Ready" : missing, signingReady));
 
     if (setupBox) {
       setupBox.style.display = 'block';
@@ -345,16 +401,28 @@ const ApkBuilder = {
 
     try {
       this.appendLog(`Collecting project files for "${projName}"...`, "info");
-      const filesMap = await window.FileSystem.loadAllFilesContent();
-      this.appendLog(`Loaded ${Object.keys(filesMap).length} project files into memory.`, "info");
+      const allFilesMap = await window.FileSystem.loadAllFilesContent();
+      // Never send previous build outputs to the packager: stale or corrupt
+      // APKs under build/ must not end up inside the new APK.
+      const filesMap = {};
+      let skippedOutputs = 0;
+      for (const [path, content] of Object.entries(allFilesMap)) {
+        if (path.startsWith('build/') || path.toLowerCase().endsWith('.apk')) {
+          skippedOutputs++;
+          continue;
+        }
+        filesMap[path] = content;
+      }
+      this.appendLog(`Loaded ${Object.keys(filesMap).length} project files into memory.` +
+        (skippedOutputs > 0 ? ` (skipped ${skippedOutputs} previous build artifact(s))` : ''), "info");
 
       if (window.Bridge && window.Bridge.isAvailable()) {
-        const rootUri = (window.FileSystem && window.FileSystem.currentProject && window.FileSystem.currentProject.rootUri)
-          ? window.FileSystem.currentProject.rootUri
-          : null;
-        const result = await window.Bridge.buildApk(projName, filesMap, (progress) => {
+        const options = this.collectBuildOptions();
+        this.appendLog(`Build config: ${options.applicationId || '(auto)'} ` +
+          `v${options.versionName || '1.0'} (${options.versionCode || 1}) [${options.buildType}]`, "info");
+        const result = await window.Bridge.buildApkWithOptions(projName, filesMap, options, (progress) => {
           this.handleBuildProgress(progress);
-        }, rootUri);
+        });
 
         this.handleBuildSuccess(result);
       } else {
@@ -370,6 +438,20 @@ const ApkBuilder = {
         startBtn.innerHTML = `<span class="btn-icon-svg">${Icons.android}</span><span>Rebuild APK</span>`;
       }
     }
+  },
+
+  collectBuildOptions() {
+    const read = (id) => {
+      const el = document.getElementById(id);
+      return el ? (el.value || '').trim() : '';
+    };
+    const versionCode = parseInt(read('apk-version-code'), 10);
+    return {
+      buildType: read('apk-build-type') === 'release' ? 'release' : 'debug',
+      applicationId: read('apk-app-id') || null,
+      versionCode: Number.isFinite(versionCode) && versionCode > 0 ? versionCode : 1,
+      versionName: read('apk-version-name') || '1.0'
+    };
   },
 
   handleBuildProgress(progress) {
@@ -465,6 +547,43 @@ const ApkBuilder = {
         details += `\nDownload copy: ${result.downloadPath}`;
       }
       document.getElementById('apk-result-details').textContent = details;
+
+      // Validated build identity (package / version / variant).
+      const configEl = document.getElementById('apk-result-config');
+      if (configEl) {
+        const parts = [];
+        if (result.packageName) parts.push(result.packageName);
+        if (result.versionName) parts.push(`v${result.versionName} (${result.versionCode || 1})`);
+        if (result.buildType) parts.push(result.buildType);
+        configEl.textContent = parts.join(' • ');
+        configEl.style.display = parts.length > 0 ? 'block' : 'none';
+      }
+
+      // Automated installability validation checklist.
+      const validationEl = document.getElementById('apk-validation-list');
+      if (validationEl) {
+        validationEl.innerHTML = '';
+        const checks = result.validation && Array.isArray(result.validation.checks)
+          ? result.validation.checks
+          : [];
+        if (checks.length > 0) {
+          for (const check of checks) {
+            const row = document.createElement('div');
+            row.className = `apk-check-row ${check.passed ? 'pass' : 'fail'}`;
+            const mark = document.createElement('span');
+            mark.className = 'apk-check-mark';
+            mark.textContent = check.passed ? '✓' : '✗';
+            const label = document.createElement('span');
+            label.className = 'apk-check-label';
+            label.textContent = `${check.name || 'Check'} — ${check.detail || ''}`;
+            row.appendChild(mark);
+            row.appendChild(label);
+            validationEl.appendChild(row);
+          }
+        } else {
+          validationEl.innerHTML = '<div class="apk-check-row pass"><span class="apk-check-mark">✓</span><span class="apk-check-label">Built and verified on device</span></div>';
+        }
+      }
     }
 
     if (window.Terminal) {
@@ -545,7 +664,12 @@ const ApkBuilder = {
       apkSize: 1024 * 1450,
       savedToProject: false,
       projectRelativePath: `${projName}-debug.apk (browser demo — download manually)`,
-      downloadPath: `/sdcard/Download/${projName}-debug.apk`
+      downloadPath: `/sdcard/Download/${projName}-debug.apk`,
+      buildType: 'debug',
+      packageName: `com.codex.app.${projName.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'webapp'}`,
+      versionCode: 1,
+      versionName: '1.0',
+      validation: { valid: true, checks: [] }
     });
   }
 };

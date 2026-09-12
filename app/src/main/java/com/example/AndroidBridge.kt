@@ -490,6 +490,8 @@ class AndroidBridge(
     fun checkTermuxToolchain(callbackId: String) {
         scope.launch(Dispatchers.IO) {
             val toolchain = ApkBuildHelper.checkToolchain(activity)
+            val missingArr = org.json.JSONArray()
+            for (tool in toolchain.missingTools) missingArr.put(tool)
             val obj = JSONObject().apply {
                 put("termuxInstalled", toolchain.termuxInstalled)
                 put("openJdkAvailable", toolchain.openJdkAvailable)
@@ -497,6 +499,14 @@ class AndroidBridge(
                 put("buildToolsAvailable", toolchain.buildToolsAvailable)
                 put("details", toolchain.details)
                 put("setupScript", toolchain.setupScript)
+                put("aapt2Available", toolchain.aapt2Path != null)
+                put("d8Available", toolchain.d8Path != null)
+                put("zipalignAvailable", toolchain.zipalignPath != null)
+                put("apksignerAvailable", toolchain.apksignerPath != null)
+                put("keytoolAvailable", toolchain.keytoolPath != null)
+                put("androidJarAvailable", toolchain.androidJarPath != null)
+                put("ready", toolchain.ready)
+                put("missingTools", missingArr)
             }
             val escaped = JSONObject.quote(obj.toString())
             // Canonical callback name consumed by bridge.js.
@@ -508,17 +518,36 @@ class AndroidBridge(
 
     @JavascriptInterface
     fun buildApk(projectName: String, filesJson: String, callbackId: String) {
-        buildApkInternal(projectName, filesJson, callbackId, null)
+        buildApkInternal(projectName, filesJson, callbackId, null, null)
     }
 
     @JavascriptInterface
     fun buildApk(projectName: String, filesJson: String, callbackId: String, projectRootUriStr: String) {
-        buildApkInternal(projectName, filesJson, callbackId, projectRootUriStr)
+        buildApkInternal(projectName, filesJson, callbackId, projectRootUriStr, null)
     }
 
-    private fun buildApkInternal(projectName: String, filesJson: String, callbackId: String, projectRootUriStr: String?) {
+    /**
+     * Options-driven build. [optionsJson] follows the [ApkBuildOptions] JSON
+     * contract (buildType debug|release, applicationId, versionCode,
+     * versionName, minSdk, targetSdk, projectRootUri, release keystore...).
+     * Success is reported ONLY for a signed APK that passes automated
+     * installability validation; any failure surfaces the real error.
+     */
+    @JavascriptInterface
+    fun buildApkWithOptions(projectName: String, filesJson: String, callbackId: String, optionsJson: String) {
+        buildApkInternal(projectName, filesJson, callbackId, null, optionsJson)
+    }
+
+    private fun buildApkInternal(
+        projectName: String,
+        filesJson: String,
+        callbackId: String,
+        projectRootUriStr: String?,
+        optionsJson: String?
+    ) {
         scope.launch(Dispatchers.IO) {
             try {
+                val options = ApkBuildOptions.fromJson(optionsJson)
                 val jsonObject = JSONObject(filesJson)
                 val filesMap = mutableMapOf<String, ByteArray>()
                 val keys = jsonObject.keys()
@@ -528,10 +557,12 @@ class AndroidBridge(
                     filesMap[key] = textContent.toByteArray(Charsets.UTF_8)
                 }
 
-                // Resolve the SAF project folder: explicit URI from JS wins,
+                // Resolve the SAF project folder: explicit URI from options/JS wins,
                 // otherwise fall back to the persisted project URI.
+                val explicitRoot = options.projectRootUri?.takeIf { it.isNotBlank() }
+                    ?: projectRootUriStr?.takeIf { it.isNotBlank() }
                 val resolvedRootUri: Uri? = try {
-                    val explicit = projectRootUriStr?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+                    val explicit = explicitRoot?.let { Uri.parse(it) }
                     explicit ?: activity.getPersistedProjectUri()?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
                 } catch (e: Exception) {
                     null
@@ -542,6 +573,7 @@ class AndroidBridge(
                     projectName = projectName,
                     projectFilesMap = filesMap,
                     projectRootUri = resolvedRootUri,
+                    options = options,
                     onProgress = { step, total, stepName, logLine ->
                         val progressObj = JSONObject().apply {
                             put("step", step)
@@ -558,6 +590,18 @@ class AndroidBridge(
                 // Guarantee non-null contract: never emit null apkName/apkSize
                 // (the previous 6-arg bridge contract produced nulls in JS).
                 val safeName = builtApk.name.ifBlank { "${projectName.ifBlank { "WebApp" }}-debug.apk" }
+                val checksArr = org.json.JSONArray()
+                for (check in result.validationChecks) {
+                    checksArr.put(JSONObject().apply {
+                        put("name", check.name)
+                        put("passed", check.passed)
+                        put("detail", check.detail)
+                    })
+                }
+                val validationObj = JSONObject().apply {
+                    put("valid", result.validationChecks.isNotEmpty() && result.validationChecks.all { it.passed })
+                    put("checks", checksArr)
+                }
                 val resultObj = JSONObject().apply {
                     put("success", true)
                     put("apkPath", builtApk.absolutePath)
@@ -567,6 +611,11 @@ class AndroidBridge(
                     put("projectRelativePath", result.projectRelativePath ?: JSONObject.NULL)
                     put("projectUri", result.projectUri ?: JSONObject.NULL)
                     put("downloadPath", result.downloadFile?.absolutePath ?: JSONObject.NULL)
+                    put("buildType", result.buildType)
+                    put("packageName", result.applicationId)
+                    put("versionCode", result.versionCode)
+                    put("versionName", result.versionName)
+                    put("validation", validationObj)
                 }
                 val esc = JSONObject.quote(resultObj.toString())
                 evaluateJs("window.onAndroidApkBuildComplete && window.onAndroidApkBuildComplete(\"$callbackId\", true, $esc, null)")
@@ -601,13 +650,49 @@ class AndroidBridge(
             try {
                 val file = File(apkPath)
                 if (!file.exists()) {
-                    throw IllegalStateException("APK file not found at $apkPath")
+                    throw IllegalStateException("APK file not found at $apkPath. Please rebuild the APK.")
+                }
+                // Never hand a corrupt/unsigned APK to the system installer:
+                // that path only ever ends in "App not installed".
+                val readinessError = ApkBuildHelper.preInstallCheck(file)
+                if (readinessError != null) {
+                    throw IllegalStateException(readinessError)
                 }
                 ApkBuildHelper.installApk(activity, file)
                 evaluateJs("window.onAndroidApkInstalled && window.onAndroidApkInstalled(\"$callbackId\", true, null)")
             } catch (e: Exception) {
                 val err = JSONObject.quote(e.message ?: "Failed to launch installer")
                 evaluateJs("window.onAndroidApkInstalled && window.onAndroidApkInstalled(\"$callbackId\", false, $err)")
+            }
+        }
+    }
+
+    /**
+     * Whether the system will allow this app to trigger APK installs right
+     * now (Android 8+ "install unknown apps" gate). Synchronous so the web UI
+     * can guide the user to Settings before opening the installer.
+     */
+    @JavascriptInterface
+    fun canRequestPackageInstalls(): Boolean {
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                activity.packageManager.canRequestPackageInstalls()
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /** Opens the system "Install unknown apps" screen for this app. */
+    @JavascriptInterface
+    fun openUnknownSourcesSettings() {
+        activity.runOnUiThread {
+            try {
+                activity.openUnknownSourcesSettings()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }

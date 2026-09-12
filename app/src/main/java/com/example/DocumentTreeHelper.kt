@@ -102,15 +102,25 @@ object DocumentTreeHelper {
                     val docId = cursor.getString(idIndex)
                     val name = cursor.getString(nameIndex) ?: continue
 
+                    val relPath = if (parentPath.isEmpty()) name else "$parentPath/$name"
+
                     // Skip hidden/system directories like .git, node_modules, etc.
-                    if (IGNORED_NAMES.contains(name) || name.startsWith(".git")) {
+                    // Exception: always expose the APK output folder (build/apk/)
+                    // so generated installable APKs are visible in the explorer.
+                    val isApkOutputPath = relPath == "build" || relPath == "build/apk" ||
+                        relPath.startsWith("build/apk/")
+                    if (!isApkOutputPath && (IGNORED_NAMES.contains(name) || name.startsWith(".git"))) {
+                        continue
+                    }
+                    // Inside a root-level build/ directory, only descend into the
+                    // APK output folder; other build intermediates stay hidden.
+                    if (parentPath == "build" && name != "apk") {
                         continue
                     }
 
                     val mime = cursor.getString(mimeIndex)
                     val size = if (cursor.isNull(sizeIndex)) 0L else cursor.getLong(sizeIndex)
                     val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mime
-                    val relPath = if (parentPath.isEmpty()) name else "$parentPath/$name"
 
                     val fileObj = JSONObject()
                     fileObj.put("name", name)

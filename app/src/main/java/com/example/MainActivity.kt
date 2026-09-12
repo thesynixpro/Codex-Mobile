@@ -334,6 +334,34 @@ class MainActivity : ComponentActivity() {
         prefs.edit().remove("last_project_uri").apply()
     }
 
+    /**
+     * Opens the system "Install unknown apps" screen for this app so the user
+     * can grant install permission, then return and tap Install APK again.
+     */
+    fun openUnknownSourcesSettings() {
+        try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")
+                )
+            } else {
+                Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try {
+                val fallback = Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(fallback)
+            } catch (e2: Exception) {
+                e2.printStackTrace()
+            }
+        }
+    }
+
     private fun checkAndNotifyPersistedProject() {
         val uriStr = getPersistedProjectUri() ?: return
         lifecycleScope.launch(Dispatchers.IO) {

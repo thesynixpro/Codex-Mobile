@@ -28,6 +28,14 @@ Codex Mobile is a mobile-first AI coding workspace designed specifically for And
    - Mounts local Android device directories directly into the IDE using `DocumentsContract` and `OpenDocumentTree`.
    - File read, write, create, and delete operations are bridged asynchronously to native Android storage.
    - Includes browser File System Access API and folder import fallbacks when run outside the APK.
+   - The `build/apk/` output folder is always visible in the explorer so generated APKs can be found.
+
+5. **Validated On-Device APK Builder**
+   - Builds real, installable APKs from a web project using the on-device toolchain (`aapt2`, `javac`, `d8`, `apksigner`, `android.jar` via Termux).
+   - Debug builds are auto-signed with a generated debug key; release builds require your own keystore.
+   - Build options (application ID, version code/name, build type) are validated before compiling; stale artifacts and previous outputs are excluded from packaging.
+   - Every APK passes automated installability validation (ZIP integrity, binary manifest, `classes.dex`, `resources.arsc`, v1+v2 signature + `apksigner verify`, 4-byte alignment) before success is reported — failures show the real error instead of a fake success.
+   - The validated APK is saved to `build/apk/` inside the project folder (explorer auto-refreshes) plus a Download copy; **Install APK** opens the system installer via a secure `FileProvider` URI after the install-permission check, and **Share APK** uses the system share sheet.
 
 5. **Terminal & Developer Console**
    - Integrated developer console with commands: `help`, `status`, `ls`, `cat`, `test-api`, `termux-info`, `date`, `clear`.
@@ -77,6 +85,9 @@ termux-open app/build/outputs/apk/debug/app-debug.apk
 - **Native Layer (`app/src/main/java/com/example/`)**:
   - `MainActivity.kt`: Hosts the hardware-accelerated WebView, handles `WebViewClient`, edge-to-edge window insets, and Android back navigation.
   - `AndroidBridge.kt`: JavaScript interface (`@JavascriptInterface`) bridging file operations and secure storage to the web UI.
+  - `ApkBuildHelper.kt`: Real APK pipeline (aapt2 link, javac, d8, aligned packaging, apksigner signing) with pre-install readiness gates.
+  - `ApkBuildOptions.kt`: Build options plus application ID / version / SDK validation.
+  - `ApkValidator.kt`: Post-build installability checks (structure, DEX, signature, alignment).
   - `DocumentTreeHelper.kt`: Implements Android Storage Access Framework (SAF) tree traversal and content resolver streams.
   - `SecureStorageHelper.kt`: Encrypts API keys with `AES/GCM/NoPadding` using cryptographic keys generated in the `AndroidKeyStore`.
 

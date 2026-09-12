@@ -307,6 +307,34 @@ const Bridge = {
     });
   },
 
+  buildApkWithOptions(projectName, filesMap, options = {}, onProgress = null) {
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) {
+        reject(new Error('Native Android Bridge required to build APK'));
+        return;
+      }
+      const cbId = 'cb_' + (this.nextId++);
+      this.callbacks[cbId] = { resolve, reject, onProgress };
+      // Resolve SAF project folder URI: explicit option wins, else current project, else persisted.
+      const opts = Object.assign({}, options);
+      try {
+        if (!opts.projectRootUri && window.FileSystem && window.FileSystem.currentProject && window.FileSystem.currentProject.rootUri) {
+          opts.projectRootUri = window.FileSystem.currentProject.rootUri;
+        }
+        if (!opts.projectRootUri && typeof this.getPersistedProjectUri === 'function') {
+          opts.projectRootUri = this.getPersistedProjectUri();
+        }
+      } catch (e) {}
+      try {
+        window.AndroidBridge.buildApkWithOptions(projectName, JSON.stringify(filesMap), cbId, JSON.stringify(opts));
+      } catch (e) {
+        // Fallback for older native builds without the options overload.
+        delete this.callbacks[cbId];
+        reject(e);
+      }
+    });
+  },
+
   shareApk(apkPath) {
     return new Promise((resolve, reject) => {
       if (!this.isAvailable()) { reject(new Error('Native bridge unavailable')); return; }
@@ -323,6 +351,25 @@ const Bridge = {
       this.callbacks[cbId] = { resolve, reject };
       window.AndroidBridge.installApk(apkPath, cbId);
     });
+  },
+
+  // True when the OS will let this app trigger APK installs right now.
+  // (Android 8+ "install unknown apps" gate; always true on older versions.)
+  canInstallPackages() {
+    if (!this.isAvailable()) return false;
+    try {
+      return !!window.AndroidBridge.canRequestPackageInstalls();
+    } catch (e) {
+      return true;
+    }
+  },
+
+  // Opens the system "Install unknown apps" screen for this app.
+  openInstallSettings() {
+    if (!this.isAvailable()) return;
+    try {
+      window.AndroidBridge.openUnknownSourcesSettings();
+    } catch (e) {}
   },
 
   log(msg) {

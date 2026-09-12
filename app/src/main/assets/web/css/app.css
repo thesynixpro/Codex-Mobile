@@ -2278,6 +2278,88 @@ html, body {
   gap: 6px;
   flex-shrink: 0;
 }
+.result-config {
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+/* --- APK build options --- */
+.apk-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.apk-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  grid-column: span 2;
+}
+.apk-option-half {
+  grid-column: span 1;
+}
+.apk-option-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.apk-option-input {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 6px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.apk-option-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.apk-options-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+/* --- APK validation checklist --- */
+.apk-validation-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.apk-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.apk-check-row.pass {
+  color: #3fb950;
+}
+.apk-check-row.fail {
+  color: #f85149;
+}
+.apk-check-mark {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.apk-check-label {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+.btn-lg {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 18px;
+}
 
 /* --- Chat History Drawer --- */
 .history-drawer-overlay {
