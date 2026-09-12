@@ -30,12 +30,12 @@ Codex Mobile is a mobile-first AI coding workspace designed specifically for And
    - Includes browser File System Access API and folder import fallbacks when run outside the APK.
    - The `build/apk/` output folder is always visible in the explorer so generated APKs can be found.
 
-5. **Validated On-Device APK Builder**
-   - Builds real, installable APKs from a web project using the on-device toolchain (`aapt2`, `javac`, `d8`, `apksigner`, `android.jar` via Termux).
-   - Debug builds are auto-signed with a generated debug key; release builds require your own keystore.
-   - Build options (application ID, version code/name, build type) are validated before compiling; stale artifacts and previous outputs are excluded from packaging.
-   - Every APK passes automated installability validation (ZIP integrity, binary manifest, `classes.dex`, `resources.arsc`, v1+v2 signature + `apksigner verify`, 4-byte alignment) before success is reported — failures show the real error instead of a fake success.
-   - The validated APK is saved to `build/apk/` inside the project folder (explorer auto-refreshes) plus a Download copy; **Install APK** opens the system installer via a secure `FileProvider` URI after the install-permission check, and **Share APK** uses the system share sheet.
+5. **Validated On-Device APK Builder (Gradle pipeline)**
+   - HopWeb-style workflow: select the project folder, tap **Build APK**, and the system stages a temporary Android Gradle project around your web files (your sources are never modified), then runs a real `:app:assembleDebug/Release` build.
+   - No manual `aapt2`/`d8`/`apksigner` hunting: the app detects the build environment (JDK 17+, Gradle 8.7, SDK platform 34 + build-tools 34.0.0, AGP 8.5.2) and automatically provisions everything it can — SDK command-line tools, SDK packages, and the Gradle distribution are downloaded once and cached under `codex-android-env`. Only a missing JDK needs one Termux command (`pkg install openjdk-17`), offered with a guided script + Open-Termux button.
+   - Build options (application ID, version code/name, debug/release) are validated before compiling; stale artifacts and previous outputs are excluded from packaging.
+   - Every APK passes automated installability validation (ZIP integrity, binary manifest, `classes.dex`, `resources.arsc`, v1+v2 signature, 4-byte alignment) before success is reported — failures show the real Gradle/validation error instead of a fake success.
+   - The validated APK is saved to `build/apk/` inside the project folder (explorer auto-refreshes) plus a Download copy; **Install APK** opens the system installer via a secure `FileProvider` URI after the install-permission check, with **Share APK** and **APK Location** actions alongside.
 
 5. **Terminal & Developer Console**
    - Integrated developer console with commands: `help`, `status`, `ls`, `cat`, `test-api`, `termux-info`, `date`, `clear`.
@@ -85,7 +85,9 @@ termux-open app/build/outputs/apk/debug/app-debug.apk
 - **Native Layer (`app/src/main/java/com/example/`)**:
   - `MainActivity.kt`: Hosts the hardware-accelerated WebView, handles `WebViewClient`, edge-to-edge window insets, and Android back navigation.
   - `AndroidBridge.kt`: JavaScript interface (`@JavascriptInterface`) bridging file operations and secure storage to the web UI.
-  - `ApkBuildHelper.kt`: Real APK pipeline (aapt2 link, javac, d8, aligned packaging, apksigner signing) with pre-install readiness gates.
+  - `ApkBuildHelper.kt`: Gradle-pipeline orchestration (wrapper staging, environment setup, build, validation) with pre-install readiness gates.
+  - `AndroidBuildEnvironment.kt`: Build-environment detection + automatic provisioning (JDK/Gradle/SDK, cached).
+  - `GradleWrapperProject.kt`: Temporary Android wrapper project generator (manifest, WebView shell, icons, Gradle files).
   - `ApkBuildOptions.kt`: Build options plus application ID / version / SDK validation.
   - `ApkValidator.kt`: Post-build installability checks (structure, DEX, signature, alignment).
   - `DocumentTreeHelper.kt`: Implements Android Storage Access Framework (SAF) tree traversal and content resolver streams.

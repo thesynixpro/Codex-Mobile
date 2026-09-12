@@ -372,6 +372,44 @@ const Bridge = {
     } catch (e) {}
   },
 
+  // Runs automatic Android build-environment setup with live progress.
+  // onProgress receives { phase, message } objects.
+  setupBuildEnvironment(onProgress = null) {
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) { reject(new Error('Native bridge unavailable')); return; }
+      const cbId = 'cb_' + (this.nextId++);
+      this.callbacks[cbId] = { resolve, reject, onProgress };
+      window.AndroidBridge.setupBuildEnvironment(cbId);
+    });
+  },
+
+  openTermuxApp() {
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) { reject(new Error('Native bridge unavailable')); return; }
+      const cbId = 'cb_' + (this.nextId++);
+      this.callbacks[cbId] = { resolve, reject };
+      window.AndroidBridge.openTermuxApp(cbId);
+    });
+  },
+
+  openDownloads() {
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) { reject(new Error('Native bridge unavailable')); return; }
+      const cbId = 'cb_' + (this.nextId++);
+      this.callbacks[cbId] = { resolve, reject };
+      window.AndroidBridge.openDownloads(cbId);
+    });
+  },
+
+  openProjectLocation(rootUri) {
+    return new Promise((resolve, reject) => {
+      if (!this.isAvailable()) { reject(new Error('Native bridge unavailable')); return; }
+      const cbId = 'cb_' + (this.nextId++);
+      this.callbacks[cbId] = { resolve, reject };
+      window.AndroidBridge.openProjectLocation(rootUri || '', cbId);
+    });
+  },
+
   log(msg) {
     if (this.isAvailable()) {
       try {
@@ -746,6 +784,55 @@ window.onAndroidApkInstalled = function(callbackId, success, errorMsg) {
   delete Bridge.callbacks[callbackId];
   if (success) cb.resolve(true);
   else cb.reject(new Error(errorMsg || 'Failed to launch installer'));
+};
+
+// --- Build-environment setup callbacks (progress stays subscribed) ---
+window.onAndroidEnvSetupProgress = function(callbackId, progressJson) {
+  const cb = Bridge.callbacks[callbackId];
+  if (cb && typeof cb.onProgress === 'function') {
+    try {
+      const progress = typeof progressJson === 'string' ? JSON.parse(progressJson) : progressJson;
+      if (progress) cb.onProgress(progress);
+    } catch (e) {
+      console.warn('Failed to parse env setup progress', e);
+    }
+  }
+};
+
+window.onAndroidEnvSetupComplete = function(callbackId, success, summaryJson, errorMsg) {
+  const cb = Bridge.callbacks[callbackId];
+  if (!cb) return;
+  delete Bridge.callbacks[callbackId];
+  if (success) {
+    try {
+      const summary = typeof summaryJson === 'string' ? JSON.parse(summaryJson) : summaryJson;
+      cb.resolve(summary || {});
+    } catch (e) {
+      cb.reject(e);
+    }
+  } else {
+    cb.reject(new Error(errorMsg || 'Environment setup failed'));
+  }
+};
+
+function resolveSimpleAck(jsName, callbackId, success, errorMsg, fallbackMsg) {
+  const cb = Bridge.callbacks[callbackId];
+  if (!cb) return;
+  delete Bridge.callbacks[callbackId];
+  if (success) cb.resolve(true);
+  else cb.reject(new Error(errorMsg || fallbackMsg));
+}
+
+window.onAndroidTermuxOpened = function(callbackId, success, errorMsg) {
+  resolveSimpleAck('onAndroidTermuxOpened', callbackId, success, errorMsg, 'Could not open Termux');
+};
+
+window.onAndroidDownloadsOpened = function(callbackId, success, errorMsg) {
+  resolveSimpleAck('onAndroidDownloadsOpened', callbackId, success, errorMsg, 'Could not open Downloads');
+};
+
+window.onAndroidLocationOpened = function(callbackId, success, errorMsg) {
+  resolveSimpleAck('onAndroidLocationOpened', callbackId, success, errorMsg, 'Could not open APK location');
 };
 
 window.Bridge = Bridge;

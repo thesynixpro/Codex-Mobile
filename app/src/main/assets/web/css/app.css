@@ -2286,6 +2286,20 @@ html, body {
   word-break: break-all;
 }
 
+.apk-setup-log {
+  margin-top: 8px;
+  max-height: 130px;
+  background-color: #0b0e14;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 8px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 /* --- APK build options --- */
 .apk-options-grid {
   display: grid;

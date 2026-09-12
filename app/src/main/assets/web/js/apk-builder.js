@@ -77,17 +77,24 @@ const ApkBuilder = {
           <!-- Toolchain Status Card -->
           <div class="apk-toolchain-card" id="apk-toolchain-card">
             <div class="toolchain-header">
-              <span>Android &amp; Termux Build Architecture</span>
-              <button type="button" class="btn btn-sm btn-outline" id="apk-check-toolchain-btn">
-                <span class="btn-icon-svg">${Icons.refresh}</span>
-                <span>Check Toolchain</span>
-              </button>
+              <span>Android Build Environment (Gradle pipeline)</span>
+              <div style="display:flex; gap:6px;">
+                <button type="button" class="btn btn-sm btn-outline" id="apk-setup-env-btn">
+                  <span class="btn-icon-svg">${Icons.terminal}</span>
+                  <span>Setup Environment</span>
+                </button>
+                <button type="button" class="btn btn-sm btn-outline" id="apk-check-toolchain-btn">
+                  <span class="btn-icon-svg">${Icons.refresh}</span>
+                  <span>Check</span>
+                </button>
+              </div>
             </div>
             <div class="toolchain-badges" id="apk-toolchain-badges">
               <div class="toolchain-pill checking">Checking dependencies...</div>
             </div>
+            <div class="apk-setup-log" id="apk-setup-log" style="display:none;"></div>
             <div class="toolchain-setup-box" id="apk-toolchain-setup-box" style="display:none;">
-              <div class="setup-hint">Run this in Termux on your phone to install compiler tools:</div>
+              <div class="setup-hint">One-time manual setup (only needed if automatic setup is blocked on this device — run in Termux):</div>
               <div class="setup-command-row">
                 <code id="apk-termux-setup-code">pkg update -y && pkg install -y openjdk-17 aapt2 d8 apksigner</code>
                 <button type="button" class="btn btn-sm btn-outline" id="apk-copy-setup-btn">
@@ -115,23 +122,23 @@ const ApkBuilder = {
               </div>
               <div class="pipeline-step-badge" id="step-2">
                 <span class="step-num">2</span>
-                <span>Manifest &amp; Shell</span>
+                <span>Environment</span>
               </div>
               <div class="pipeline-step-badge" id="step-3">
                 <span class="step-num">3</span>
-                <span>Package Assets</span>
+                <span>Wrapper Project</span>
               </div>
               <div class="pipeline-step-badge" id="step-4">
                 <span class="step-num">4</span>
-                <span>Compiler &amp; Termux</span>
+                <span>Gradle Build</span>
               </div>
               <div class="pipeline-step-badge" id="step-5">
                 <span class="step-num">5</span>
-                <span>Assemble DEX</span>
+                <span>Locate APK</span>
               </div>
               <div class="pipeline-step-badge" id="step-6">
                 <span class="step-num">6</span>
-                <span>Sign &amp; Validate</span>
+                <span>Validate &amp; Save</span>
               </div>
             </div>
 
@@ -158,6 +165,10 @@ const ApkBuilder = {
               <button type="button" class="btn btn-outline" id="apk-share-btn">
                 <span class="btn-icon-svg">${Icons.share}</span>
                 <span>Share APK</span>
+              </button>
+              <button type="button" class="btn btn-outline" id="apk-location-btn">
+                <span class="btn-icon-svg">${Icons.folder}</span>
+                <span>APK Location</span>
               </button>
             </div>
           </div>
@@ -192,8 +203,10 @@ const ApkBuilder = {
     const cancelBtn = document.getElementById('apk-btn-cancel');
     const startBuildBtn = document.getElementById('apk-btn-start-build');
     const checkToolchainBtn = document.getElementById('apk-check-toolchain-btn');
+    const setupEnvBtn = document.getElementById('apk-setup-env-btn');
     const shareBtn = document.getElementById('apk-share-btn');
     const installBtn = document.getElementById('apk-install-btn');
+    const locationBtn = document.getElementById('apk-location-btn');
     const copySetupBtn = document.getElementById('apk-copy-setup-btn');
 
     const closeModal = () => {
@@ -209,6 +222,31 @@ const ApkBuilder = {
 
     if (checkToolchainBtn) {
       checkToolchainBtn.addEventListener('click', () => this.inspectToolchain());
+    }
+
+    if (setupEnvBtn) {
+      setupEnvBtn.addEventListener('click', () => this.runEnvSetup());
+    }
+
+    if (locationBtn) {
+      locationBtn.addEventListener('click', async () => {
+        try {
+          const rootUri = (window.FileSystem && window.FileSystem.currentProject && window.FileSystem.currentProject.rootUri)
+            ? window.FileSystem.currentProject.rootUri
+            : null;
+          if (rootUri && window.Bridge.isAvailable()) {
+            await window.Bridge.openProjectLocation(rootUri);
+          } else if (window.Bridge.isAvailable()) {
+            await window.Bridge.openDownloads();
+          }
+        } catch (err) {
+          try {
+            if (window.Bridge.isAvailable()) await window.Bridge.openDownloads();
+          } catch (e2) {
+            alert(`Could not open APK location: ${err.message}`);
+          }
+        }
+      });
     }
 
     if (shareBtn) {
@@ -317,10 +355,17 @@ const ApkBuilder = {
       // Browser environment check
       this.toolchainInfo = {
         termuxInstalled: false,
+        shellAvailable: false,
         openJdkAvailable: false,
+        jdkVersion: null,
         gradleAvailable: false,
+        gradleVersion: null,
         buildToolsAvailable: false,
-        setupScript: "pkg update -y && pkg install -y openjdk-17 aapt2 d8 apksigner"
+        platformInstalled: false,
+        buildToolsInstalled: false,
+        ready: false,
+        missingTools: ['Native Android build environment (build from the app on your phone)'],
+        setupScript: "pkg update -y && pkg install -y openjdk-17 git unzip"
       };
       this.renderToolchainBadges(this.toolchainInfo);
     }
@@ -340,22 +385,90 @@ const ApkBuilder = {
       return b;
     };
 
-    badgesContainer.appendChild(createBadge("Termux App", info.termuxInstalled ? "Detected" : "Optional / Installable", info.termuxInstalled));
-    badgesContainer.appendChild(createBadge("Java (OpenJDK)", info.openJdkAvailable ? "Ready" : "Termux Ready", info.openJdkAvailable));
-    badgesContainer.appendChild(createBadge("Gradle", info.gradleAvailable ? "Ready" : "Not required", info.gradleAvailable));
-    badgesContainer.appendChild(createBadge("Build Tools (aapt2/d8)", info.buildToolsAvailable ? "Ready" : "Termux Ready", info.buildToolsAvailable));
-    const signingReady = info.ready === true;
+    badgesContainer.appendChild(createBadge("Build shell", info.shellAvailable ? "Available" : "Blocked (guided setup offered)", !!info.shellAvailable));
+    badgesContainer.appendChild(createBadge("Termux App", info.termuxInstalled ? "Detected" : "Optional", !!info.termuxInstalled));
+    badgesContainer.appendChild(createBadge("JDK 17+", info.jdkVersion ? info.jdkVersion : "Missing (one Termux command)", !!info.openJdkAvailable));
+    badgesContainer.appendChild(createBadge("Gradle 8.7+", info.gradleVersion ? info.gradleVersion : "Auto-installs", !!info.gradleAvailable));
+    badgesContainer.appendChild(createBadge("SDK platform + build-tools", info.buildToolsAvailable ? "Installed" : "Auto-installs", !!info.buildToolsAvailable));
+    const envReady = info.ready === true;
     const missing = Array.isArray(info.missingTools) && info.missingTools.length > 0
-      ? `Missing: ${info.missingTools.join(', ')}`
-      : 'Signed-APK pipeline ready';
-    badgesContainer.appendChild(createBadge("Signed APK pipeline", signingReady ? "Ready" : missing, signingReady));
+      ? `Setup needed: ${info.missingTools.join(', ')}`
+      : 'Gradle pipeline ready (AGP, signing + alignment included)';
+    badgesContainer.appendChild(createBadge("Signed APK pipeline", envReady ? "Ready" : missing, envReady));
 
     if (setupBox) {
       setupBox.style.display = 'block';
       const codeEl = document.getElementById('apk-termux-setup-code');
       if (codeEl && info.setupScript) {
-        codeEl.textContent = info.setupScript.split('\n').filter(l => !l.startsWith('#')).join(' && ').trim() || "pkg install -y openjdk-17 aapt2 d8 apksigner";
+        codeEl.textContent = info.setupScript;
       }
+    }
+  },
+
+  setupLogLine(text, kind = 'info') {
+    const log = document.getElementById('apk-setup-log');
+    if (!log) return;
+    log.style.display = 'block';
+    const div = document.createElement('div');
+    div.className = `log-line ${kind}`;
+    div.textContent = `[${new Date().toTimeString().split(' ')[0]}] ${text}`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  },
+
+  // Automatic environment setup with live in-app progress. Returns true when
+  // the environment is ready; on failure shows the guided Termux script and,
+  // when possible, offers to open Termux.
+  async runEnvSetup() {
+    if (!(window.Bridge && window.Bridge.isAvailable())) {
+      alert("Environment setup needs the native Android bridge. Build from the app on your phone.");
+      return false;
+    }
+    const setupBtn = document.getElementById('apk-setup-env-btn');
+    const startBtn = document.getElementById('apk-btn-start-build');
+    if (setupBtn) setupBtn.disabled = true;
+    if (startBtn) startBtn.disabled = true;
+    const log = document.getElementById('apk-setup-log');
+    if (log) {
+      log.style.display = 'block';
+      log.innerHTML = '';
+    }
+    this.setupLogLine("Starting automatic build-environment setup (cached after first run)...");
+    try {
+      const summary = await window.Bridge.setupBuildEnvironment((progress) => {
+        if (progress && progress.message) this.setupLogLine(`[${progress.phase || 'setup'}] ${progress.message}`);
+      });
+      this.setupLogLine("Environment setup finished. Re-checking...", 'success');
+      await this.inspectToolchain();
+      const ready = !!(summary && summary.ready) || !!(this.toolchainInfo && this.toolchainInfo.ready);
+      if (ready) {
+        this.setupLogLine("Build environment is ready.", 'success');
+        if (window.Terminal) window.Terminal.log("Android build environment ready (cached).", "system");
+      } else {
+        this.setupLogLine("Setup finished but components are still missing. See the guided script below.", 'error');
+      }
+      return ready;
+    } catch (err) {
+      this.setupLogLine(`Setup failed: ${err.message}`, 'error');
+      if (window.Terminal) window.Terminal.log(`Environment setup failed: ${err.message}`, "error");
+      // Guided fallback: show the manual script and offer to open Termux.
+      await this.inspectToolchain();
+      const open = confirm(
+        "Automatic setup could not finish:\n\n" +
+        `${err.message}\n\n` +
+        "Tap OK to open Termux and run the one-time setup script shown below, then come back and tap Setup Environment again."
+      );
+      if (open) {
+        try {
+          await window.Bridge.openTermuxApp();
+        } catch (e2) {
+          alert(`Could not open Termux: ${e2.message}`);
+        }
+      }
+      return false;
+    } finally {
+      if (setupBtn) setupBtn.disabled = false;
+      if (startBtn) startBtn.disabled = false;
     }
   },
 
@@ -398,6 +511,32 @@ const ApkBuilder = {
     }
 
     const projName = window.FileSystem.currentProject.name || "WebApp";
+
+    // Automatic environment check → automatic setup when needed.
+    if (window.Bridge && window.Bridge.isAvailable()) {
+      if (!this.toolchainInfo) {
+        await this.inspectToolchain();
+      }
+      if (this.toolchainInfo && this.toolchainInfo.ready !== true) {
+        this.appendLog("Build environment incomplete. Running automatic setup first (cached afterwards)...", "info");
+        const ready = await this.runEnvSetup();
+        if (!ready) {
+          this.handleBuildError("Build environment is not ready. Complete the setup above, then tap Build APK again.");
+          this.isBuilding = false;
+          if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.innerHTML = `<span class="btn-icon-svg">${Icons.android}</span><span>Rebuild APK</span>`;
+          }
+          return;
+        }
+        this.appendLog("Environment ready. Starting Gradle build pipeline...", "success");
+        // runEnvSetup re-enables buttons in its finally block; lock again for the build.
+        if (startBtn) {
+          startBtn.disabled = true;
+          startBtn.innerHTML = `<span class="btn-icon-svg">${Icons.refresh}</span><span>Building APK...</span>`;
+        }
+      }
+    }
 
     try {
       this.appendLog(`Collecting project files for "${projName}"...`, "info");
@@ -639,12 +778,12 @@ const ApkBuilder = {
 
   async simulateWebBuild(projName, filesMap) {
     const steps = [
-      { step: 1, name: "Verify Assets", log: "Verifying HTML entry point and CSS/JS assets..." },
-      { step: 2, name: "Manifest & Shell", log: "Synthesizing AndroidManifest.xml and WebView Activity..." },
-      { step: 3, name: "Package Assets", log: `Packaging ${Object.keys(filesMap).length} files into assets/www/...` },
-      { step: 4, name: "Compiler & Termux", log: "Termux toolchain script generated. Preparing compilation..." },
-      { step: 5, name: "Assemble DEX", log: "Assembling classes.dex and package archive..." },
-      { step: 6, name: "Sign APK", log: "Verifying package signature and finalizing APK container..." }
+      { step: 1, name: "Verify Config & Assets", log: "Verifying application ID, versions, and project files..." },
+      { step: 2, name: "Build Environment", log: "Checking cached JDK, Gradle, and Android SDK..." },
+      { step: 3, name: "Wrapper Project", log: `Staging temporary Gradle project with ${Object.keys(filesMap).length} web files...` },
+      { step: 4, name: "Gradle Build", log: "Running :app:assembleDebug (AGP signs + aligns the APK)..." },
+      { step: 5, name: "Locate APK", log: "Locating app-debug.apk under app/build/outputs/apk/debug/..." },
+      { step: 6, name: "Validate & Save", log: "Validating signature, structure, and alignment..." }
     ];
 
     for (const s of steps) {

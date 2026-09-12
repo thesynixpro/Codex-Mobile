@@ -491,28 +491,116 @@ class AndroidBridge(
         scope.launch(Dispatchers.IO) {
             val toolchain = ApkBuildHelper.checkToolchain(activity)
             val missingArr = org.json.JSONArray()
-            for (tool in toolchain.missingTools) missingArr.put(tool)
+            for (tool in toolchain.missingComponents) missingArr.put(tool)
             val obj = JSONObject().apply {
                 put("termuxInstalled", toolchain.termuxInstalled)
+                put("shellAvailable", toolchain.shellAvailable)
                 put("openJdkAvailable", toolchain.openJdkAvailable)
+                put("jdkVersion", toolchain.jdkVersion ?: JSONObject.NULL)
                 put("gradleAvailable", toolchain.gradleAvailable)
+                put("gradleVersion", toolchain.gradleVersion ?: JSONObject.NULL)
                 put("buildToolsAvailable", toolchain.buildToolsAvailable)
-                put("details", toolchain.details)
-                put("setupScript", toolchain.setupScript)
-                put("aapt2Available", toolchain.aapt2Path != null)
-                put("d8Available", toolchain.d8Path != null)
-                put("zipalignAvailable", toolchain.zipalignPath != null)
-                put("apksignerAvailable", toolchain.apksignerPath != null)
-                put("keytoolAvailable", toolchain.keytoolPath != null)
-                put("androidJarAvailable", toolchain.androidJarPath != null)
+                put("sdkDir", toolchain.sdkDir ?: JSONObject.NULL)
+                put("platformInstalled", toolchain.platformInstalled)
+                put("buildToolsInstalled", toolchain.buildToolsInstalled)
                 put("ready", toolchain.ready)
                 put("missingTools", missingArr)
+                put("details", toolchain.details)
+                put("setupScript", toolchain.setupScript)
             }
             val escaped = JSONObject.quote(obj.toString())
             // Canonical callback name consumed by bridge.js.
             evaluateJs("window.onAndroidTermuxToolchainChecked && window.onAndroidTermuxToolchainChecked(\"$callbackId\", true, $escaped, null)")
             // Legacy alias kept for older cached web bundles that listen on the old name.
             evaluateJs("window.onAndroidToolchainChecked && window.onAndroidToolchainChecked(\"$callbackId\", true, $escaped, null)")
+        }
+    }
+
+    /**
+     * Runs automatic build-environment setup (JDK check, SDK + Gradle
+     * provisioning with caching). Progress streams via
+     * `onAndroidEnvSetupProgress`; completion via `onAndroidEnvSetupComplete`.
+     */
+    @JavascriptInterface
+    fun setupBuildEnvironment(callbackId: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val status = AndroidBuildEnvironment.setup(activity) { phase, message ->
+                    message.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+                        val progressObj = JSONObject().apply {
+                            put("phase", phase)
+                            put("message", line.trim().take(300))
+                        }
+                        val esc = JSONObject.quote(progressObj.toString())
+                        evaluateJs("window.onAndroidEnvSetupProgress && window.onAndroidEnvSetupProgress(\"$callbackId\", $esc)")
+                    }
+                }
+                val summary = JSONObject().apply {
+                    put("ready", status.ready)
+                    put("sdkDir", status.sdkDir ?: JSONObject.NULL)
+                    put("jdkMajor", status.jdkMajor ?: JSONObject.NULL)
+                    put("gradleVersion", status.gradleVersion ?: JSONObject.NULL)
+                    val missingArr = org.json.JSONArray()
+                    for (tool in status.missing) missingArr.put(tool)
+                    put("missing", missingArr)
+                }
+                val esc = JSONObject.quote(summary.toString())
+                evaluateJs("window.onAndroidEnvSetupComplete && window.onAndroidEnvSetupComplete(\"$callbackId\", true, $esc, null)")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                val err = JSONObject.quote(e.message ?: "Environment setup failed")
+                evaluateJs("window.onAndroidEnvSetupComplete && window.onAndroidEnvSetupComplete(\"$callbackId\", false, null, $err)")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun openTermuxApp(callbackId: String) {
+        activity.runOnUiThread {
+            try {
+                if (ApkBuildHelper.openTermuxApp(activity)) {
+                    evaluateJs("window.onAndroidTermuxOpened && window.onAndroidTermuxOpened(\"$callbackId\", true, null)")
+                } else {
+                    evaluateJs("window.onAndroidTermuxOpened && window.onAndroidTermuxOpened(\"$callbackId\", false, \"Termux app is not installed\")")
+                }
+            } catch (e: Exception) {
+                val err = JSONObject.quote(e.message ?: "Could not open Termux")
+                evaluateJs("window.onAndroidTermuxOpened && window.onAndroidTermuxOpened(\"$callbackId\", false, $err)")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun openDownloads(callbackId: String) {
+        activity.runOnUiThread {
+            try {
+                if (ApkBuildHelper.openDownloads(activity)) {
+                    evaluateJs("window.onAndroidDownloadsOpened && window.onAndroidDownloadsOpened(\"$callbackId\", true, null)")
+                } else {
+                    evaluateJs("window.onAndroidDownloadsOpened && window.onAndroidDownloadsOpened(\"$callbackId\", false, \"No app can open Downloads\")")
+                }
+            } catch (e: Exception) {
+                val err = JSONObject.quote(e.message ?: "Could not open Downloads")
+                evaluateJs("window.onAndroidDownloadsOpened && window.onAndroidDownloadsOpened(\"$callbackId\", false, $err)")
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun openProjectLocation(projectRootUriStr: String, callbackId: String) {
+        activity.runOnUiThread {
+            try {
+                if (projectRootUriStr.isNotBlank() && ApkBuildHelper.openProjectLocation(activity, projectRootUriStr)) {
+                    evaluateJs("window.onAndroidLocationOpened && window.onAndroidLocationOpened(\"$callbackId\", true, null)")
+                } else if (ApkBuildHelper.openDownloads(activity)) {
+                    evaluateJs("window.onAndroidLocationOpened && window.onAndroidLocationOpened(\"$callbackId\", true, null)")
+                } else {
+                    evaluateJs("window.onAndroidLocationOpened && window.onAndroidLocationOpened(\"$callbackId\", false, \"No file manager available\")")
+                }
+            } catch (e: Exception) {
+                val err = JSONObject.quote(e.message ?: "Could not open APK location")
+                evaluateJs("window.onAndroidLocationOpened && window.onAndroidLocationOpened(\"$callbackId\", false, $err)")
+            }
         }
     }
 
