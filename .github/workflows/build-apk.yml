@@ -31,13 +31,15 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Create Temporary Debug Keystore
+      # Fix for missing debug.keystore in repository root path
+      - name: Create Debug Keystore in Expected Locations
         run: |
           mkdir -p ~/.android
           keytool -genkey -v -keystore ~/.android/debug.keystore \
             -storepass android -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
+          cp ~/.android/debug.keystore ./debug.keystore
 
       - name: Build APK
         run: gradle :app:assembleDebug --stacktrace --no-daemon
