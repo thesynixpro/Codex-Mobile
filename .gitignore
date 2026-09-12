@@ -16,3 +16,6 @@
 local.properties
 .env
 debug.keystore
+# Local spec/notes files (never push to the repo).
+/prompt
+/buildPrompt
