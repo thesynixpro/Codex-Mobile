@@ -271,7 +271,7 @@ const Bridge = {
     });
   },
 
-  buildApk(projectName, filesMap, onProgress = null) {
+  buildApk(projectName, filesMap, onProgress = null, projectRootUri = null) {
     return new Promise((resolve, reject) => {
       if (!this.isAvailable()) {
         reject(new Error('Native Android Bridge required to build APK'));
@@ -279,7 +279,31 @@ const Bridge = {
       }
       const cbId = 'cb_' + (this.nextId++);
       this.callbacks[cbId] = { resolve, reject, onProgress };
-      window.AndroidBridge.buildApk(projectName, JSON.stringify(filesMap), cbId);
+      // Resolve SAF project folder URI: explicit arg wins, else current project, else persisted.
+      let rootUri = projectRootUri || null;
+      try {
+        if (!rootUri && window.FileSystem && window.FileSystem.currentProject && window.FileSystem.currentProject.rootUri) {
+          rootUri = window.FileSystem.currentProject.rootUri;
+        }
+        if (!rootUri && typeof this.getPersistedProjectUri === 'function') {
+          rootUri = this.getPersistedProjectUri();
+        }
+      } catch (e) {}
+      try {
+        if (rootUri) {
+          window.AndroidBridge.buildApk(projectName, JSON.stringify(filesMap), cbId, rootUri);
+        } else {
+          window.AndroidBridge.buildApk(projectName, JSON.stringify(filesMap), cbId);
+        }
+      } catch (e) {
+        // Fallback to 3-arg overload if 4-arg dispatch fails on old native builds.
+        try {
+          window.AndroidBridge.buildApk(projectName, JSON.stringify(filesMap), cbId);
+        } catch (e2) {
+          delete this.callbacks[cbId];
+          reject(e2);
+        }
+      }
     });
   },
 
@@ -572,7 +596,9 @@ window.onAndroidBackgroundTaskDismissed = function(callbackId, success, errorMsg
 };
 
 // --- APK Build Global Callbacks ---
-window.onAndroidTermuxToolchainChecked = function(callbackId, success, toolchainJson, errorMsg) {
+// Native toolchain check resolves via onAndroidTermuxToolchainChecked.
+// Older native builds called onAndroidToolchainChecked — support both names.
+function resolveToolchainCallback(callbackId, success, toolchainJson, errorMsg) {
   const cb = Bridge.callbacks[callbackId];
   if (!cb) return;
   delete Bridge.callbacks[callbackId];
@@ -586,23 +612,76 @@ window.onAndroidTermuxToolchainChecked = function(callbackId, success, toolchain
   } else {
     cb.reject(new Error(errorMsg || 'Failed to check toolchain'));
   }
-};
+}
+window.onAndroidTermuxToolchainChecked = resolveToolchainCallback;
+window.onAndroidToolchainChecked = resolveToolchainCallback;
 
-window.onAndroidApkBuildProgress = function(callbackId, step, totalSteps, stepName, logLine) {
+// Native sends progress as a single JSON string:
+//   onAndroidApkBuildProgress(callbackId, "<json:{step,totalSteps,stepName,logLine}>")
+window.onAndroidApkBuildProgress = function(callbackId, progressJson, legacyTotalSteps, legacyStepName, legacyLogLine) {
   const cb = Bridge.callbacks[callbackId];
   if (cb && typeof cb.onProgress === 'function') {
-    cb.onProgress({ step, totalSteps, stepName, logLine });
+    try {
+      let progress = null;
+      if (typeof progressJson === 'string') {
+        try {
+          progress = JSON.parse(progressJson);
+        } catch (e) {
+          progress = null;
+        }
+      } else if (progressJson && typeof progressJson === 'object') {
+        progress = progressJson;
+      }
+      // Legacy 5-arg form: (callbackId, step, totalSteps, stepName, logLine)
+      if (!progress && typeof progressJson === 'number') {
+        progress = { step: progressJson, totalSteps: legacyTotalSteps, stepName: legacyStepName, logLine: legacyLogLine };
+      }
+      if (progress && typeof progress.step !== 'undefined') {
+        cb.onProgress(progress);
+      }
+    } catch (e) {
+      console.warn('Failed to parse APK build progress', e);
+    }
   }
 };
 
-window.onAndroidApkBuildComplete = function(callbackId, success, apkPath, apkName, apkSize, errorMsg) {
+// Native sends completion as (callbackId, successBool, "<json:{apkPath,apkName,apkSize,...}>", errorMsg).
+// A legacy native form sent (callbackId, success, apkPath, apkName, apkSize, errorMsg) — support both.
+window.onAndroidApkBuildComplete = function(callbackId, success, resultJson, errorMsg, legacyApkName, legacyApkSize) {
   const cb = Bridge.callbacks[callbackId];
   if (!cb) return;
   delete Bridge.callbacks[callbackId];
   if (success) {
-    cb.resolve({ success: true, apkPath, apkName, apkSize });
+    try {
+      let result = null;
+      if (typeof resultJson === 'string') {
+        try {
+          result = JSON.parse(resultJson);
+        } catch (e) {
+          result = null;
+        }
+      } else if (resultJson && typeof resultJson === 'object') {
+        result = resultJson;
+      }
+      // Legacy 6-arg form fallback.
+      if (!result && typeof resultJson === 'string' && legacyApkName) {
+        result = { success: true, apkPath: resultJson, apkName: legacyApkName, apkSize: legacyApkSize };
+      }
+      if (!result || !result.apkPath) {
+        cb.reject(new Error('APK build returned an empty result (null path). Please retry the build.'));
+        return;
+      }
+      // Normalize nulls so UI never renders "null".
+      result.success = true;
+      result.apkName = result.apkName || (result.apkPath ? result.apkPath.split('/').pop() : 'app-debug.apk');
+      result.apkSize = Number(result.apkSize) || 0;
+      cb.resolve(result);
+    } catch (e) {
+      cb.reject(e);
+    }
   } else {
-    cb.reject(new Error(errorMsg || 'APK compilation failed'));
+    const msg = (typeof resultJson === 'string' && resultJson) ? resultJson : (errorMsg || 'APK compilation failed');
+    cb.reject(new Error(msg));
   }
 };
 

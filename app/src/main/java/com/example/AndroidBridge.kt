@@ -499,12 +499,24 @@ class AndroidBridge(
                 put("setupScript", toolchain.setupScript)
             }
             val escaped = JSONObject.quote(obj.toString())
+            // Canonical callback name consumed by bridge.js.
+            evaluateJs("window.onAndroidTermuxToolchainChecked && window.onAndroidTermuxToolchainChecked(\"$callbackId\", true, $escaped, null)")
+            // Legacy alias kept for older cached web bundles that listen on the old name.
             evaluateJs("window.onAndroidToolchainChecked && window.onAndroidToolchainChecked(\"$callbackId\", true, $escaped, null)")
         }
     }
 
     @JavascriptInterface
     fun buildApk(projectName: String, filesJson: String, callbackId: String) {
+        buildApkInternal(projectName, filesJson, callbackId, null)
+    }
+
+    @JavascriptInterface
+    fun buildApk(projectName: String, filesJson: String, callbackId: String, projectRootUriStr: String) {
+        buildApkInternal(projectName, filesJson, callbackId, projectRootUriStr)
+    }
+
+    private fun buildApkInternal(projectName: String, filesJson: String, callbackId: String, projectRootUriStr: String?) {
         scope.launch(Dispatchers.IO) {
             try {
                 val jsonObject = JSONObject(filesJson)
@@ -516,26 +528,45 @@ class AndroidBridge(
                     filesMap[key] = textContent.toByteArray(Charsets.UTF_8)
                 }
 
-                val builtApk = ApkBuildHelper.buildWebApk(
-                    context = activity,
-                    projectName = projectName,
-                    projectFilesMap = filesMap
-                ) { step, total, stepName, logLine ->
-                    val progressObj = JSONObject().apply {
-                        put("step", step)
-                        put("totalSteps", total)
-                        put("stepName", stepName)
-                        put("logLine", logLine)
-                    }
-                    val esc = JSONObject.quote(progressObj.toString())
-                    evaluateJs("window.onAndroidApkBuildProgress && window.onAndroidApkBuildProgress(\"$callbackId\", $esc)")
+                // Resolve the SAF project folder: explicit URI from JS wins,
+                // otherwise fall back to the persisted project URI.
+                val resolvedRootUri: Uri? = try {
+                    val explicit = projectRootUriStr?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+                    explicit ?: activity.getPersistedProjectUri()?.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+                } catch (e: Exception) {
+                    null
                 }
 
+                val result = ApkBuildHelper.buildWebApk(
+                    context = activity,
+                    projectName = projectName,
+                    projectFilesMap = filesMap,
+                    projectRootUri = resolvedRootUri,
+                    onProgress = { step, total, stepName, logLine ->
+                        val progressObj = JSONObject().apply {
+                            put("step", step)
+                            put("totalSteps", total)
+                            put("stepName", stepName)
+                            put("logLine", logLine)
+                        }
+                        val esc = JSONObject.quote(progressObj.toString())
+                        evaluateJs("window.onAndroidApkBuildProgress && window.onAndroidApkBuildProgress(\"$callbackId\", $esc)")
+                    }
+                )
+
+                val builtApk = result.cacheFile
+                // Guarantee non-null contract: never emit null apkName/apkSize
+                // (the previous 6-arg bridge contract produced nulls in JS).
+                val safeName = builtApk.name.ifBlank { "${projectName.ifBlank { "WebApp" }}-debug.apk" }
                 val resultObj = JSONObject().apply {
                     put("success", true)
                     put("apkPath", builtApk.absolutePath)
-                    put("apkName", builtApk.name)
+                    put("apkName", safeName)
                     put("apkSize", builtApk.length())
+                    put("savedToProject", result.projectUri != null)
+                    put("projectRelativePath", result.projectRelativePath ?: JSONObject.NULL)
+                    put("projectUri", result.projectUri ?: JSONObject.NULL)
+                    put("downloadPath", result.downloadFile?.absolutePath ?: JSONObject.NULL)
                 }
                 val esc = JSONObject.quote(resultObj.toString())
                 evaluateJs("window.onAndroidApkBuildComplete && window.onAndroidApkBuildComplete(\"$callbackId\", true, $esc, null)")

@@ -176,6 +176,73 @@ object DocumentTreeHelper {
         } ?: throw IllegalStateException("Unable to open output stream for $uri")
     }
 
+    fun writeBinaryFileContent(context: Context, uri: Uri, bytes: ByteArray) {
+        context.contentResolver.openOutputStream(uri, "wt")?.use { outputStream ->
+            outputStream.write(bytes)
+            outputStream.flush()
+        } ?: throw IllegalStateException("Unable to open output stream for $uri")
+    }
+
+    /**
+     * Writes or creates a binary file (e.g. APK) in the project folder matching [relativePath].
+     * Creates any intermediate directories if they do not exist.
+     */
+    fun writeRelativeBinaryFile(
+        context: Context,
+        rootUri: Uri,
+        relativePath: String,
+        bytes: ByteArray,
+        mimeType: String? = null
+    ): Uri {
+        val normalizedPath = relativePath.trim().trimStart('/').replace('\\', '/')
+        if (normalizedPath.isEmpty()) {
+            throw IllegalArgumentException("File path cannot be empty")
+        }
+
+        val parts = normalizedPath.split('/')
+        val resolver = context.contentResolver
+        var currentParentDocId = DocumentsContract.getTreeDocumentId(rootUri)
+
+        // Navigate / create intermediate directories
+        for (i in 0 until parts.size - 1) {
+            val dirName = parts[i]
+            if (dirName.isEmpty()) continue
+
+            val foundDirId = findChildId(resolver, rootUri, currentParentDocId, dirName, isDir = true)
+            if (foundDirId != null) {
+                currentParentDocId = foundDirId
+            } else {
+                val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(rootUri, currentParentDocId)
+                val newDirUri = DocumentsContract.createDocument(
+                    resolver,
+                    parentDocUri,
+                    DocumentsContract.Document.MIME_TYPE_DIR,
+                    dirName
+                ) ?: throw IllegalStateException("Failed to create directory $dirName in project folder")
+                currentParentDocId = DocumentsContract.getDocumentId(newDirUri)
+            }
+        }
+
+        // Target file
+        val fileName = parts.last()
+        val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(rootUri, currentParentDocId)
+        val existingFileId = findChildId(resolver, rootUri, currentParentDocId, fileName, isDir = false)
+
+        val targetFileUri = if (existingFileId != null) {
+            DocumentsContract.buildDocumentUriUsingTree(rootUri, existingFileId)
+        } else {
+            DocumentsContract.createDocument(
+                resolver,
+                parentDocUri,
+                mimeType ?: getMimeTypeForFilename(fileName),
+                fileName
+            ) ?: throw IllegalStateException("Failed to create file $fileName in project folder")
+        }
+
+        writeBinaryFileContent(context, targetFileUri, bytes)
+        return targetFileUri
+    }
+
     /**
      * Writes or creates a file in the project folder matching [relativePath].
      * Creates any intermediate directories if they do not exist.
@@ -335,6 +402,7 @@ object DocumentTreeHelper {
     fun getMimeTypeForFilename(name: String): String {
         val ext = name.substringAfterLast('.', "").lowercase()
         return when (ext) {
+            "apk" -> "application/vnd.android.package-archive"
             "html", "htm" -> "text/html"
             "css" -> "text/css"
             "js", "mjs" -> "application/javascript"

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Environment
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.delay
 import org.json.JSONArray
@@ -18,6 +19,16 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 object ApkBuildHelper {
+
+    data class BuiltApkResult(
+        val cacheFile: File,
+        /** URI string of the copy saved inside the SAF project folder, or null. */
+        val projectUri: String? = null,
+        /** Display-relative path inside project folder (e.g. "MyApp-debug.apk"). */
+        val projectRelativePath: String? = null,
+        /** Absolute path of the copy in app-external Download dir, or null. */
+        val downloadFile: File? = null
+    )
 
     data class ToolchainInfo(
         val termuxInstalled: Boolean,
@@ -81,13 +92,18 @@ object ApkBuildHelper {
     /**
      * Executes the complete multi-step APK build pipeline.
      * Emits real-time progress events to the progress listener.
+     *
+     * The APK is always built to internal cache (for share/install via FileProvider),
+     * then copied into the SAF project folder (so it is visible in the project tree)
+     * and into the app-external Download directory for easy access from file managers.
      */
     suspend fun buildWebApk(
         context: Context,
         projectName: String,
         projectFilesMap: Map<String, ByteArray>,
-        onProgress: (step: Int, totalSteps: Int, stepName: String, logLine: String) -> Unit
-    ): File {
+        onProgress: (step: Int, totalSteps: Int, stepName: String, logLine: String) -> Unit,
+        projectRootUri: Uri? = null
+    ): BuiltApkResult {
         val totalSteps = 6
         val cleanName = projectName.replace(Regex("[^a-zA-Z0-9_-]"), "").ifEmpty { "WebApp" }
         val pkgName = "com.codex.app." + cleanName.lowercase()
@@ -226,7 +242,63 @@ object ApkBuildHelper {
         delay(400)
         onProgress(6, totalSteps, "APK Signing & Finalization", "Generated ready-to-share APK: ${outputApkFile.name} (${outputApkFile.length()} bytes)")
 
-        return outputApkFile
+        // Persist copies outside internal cache: project folder + visible Download dir.
+        var savedProjectUri: String? = null
+        var savedProjectRelPath: String? = null
+        var savedDownloadFile: File? = null
+        try {
+            if (projectRootUri != null) {
+                // Save directly in the project root so it appears in the file tree.
+                // Use a stable, filesystem-safe name identical to the cache file.
+                savedProjectRelPath = outputApkFile.name
+                val bytes = outputApkFile.readBytes()
+                val savedUri = DocumentTreeHelper.writeRelativeBinaryFile(
+                    context,
+                    projectRootUri,
+                    savedProjectRelPath,
+                    bytes,
+                    "application/vnd.android.package-archive"
+                )
+                savedProjectUri = savedUri.toString()
+                onProgress(6, totalSteps, "APK Signing & Finalization", "Saved APK into project folder: $savedProjectRelPath")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onProgress(6, totalSteps, "APK Signing & Finalization", "Warning: could not save APK into project folder (${e.message}). Cache copy retained.")
+        }
+        try {
+            val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: File(context.filesDir, "Download")
+            if (!downloadDir.exists()) downloadDir.mkdirs()
+            val dest = File(downloadDir, outputApkFile.name)
+            if (dest.exists()) dest.delete()
+            outputApkFile.copyTo(dest, overwrite = true)
+            savedDownloadFile = dest
+            onProgress(6, totalSteps, "APK Signing & Finalization", "Saved visible copy: ${dest.absolutePath}")
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onProgress(6, totalSteps, "APK Signing & Finalization", "Warning: could not write Download copy (${e.message}).")
+        }
+
+        return BuiltApkResult(
+            cacheFile = outputApkFile,
+            projectUri = savedProjectUri,
+            projectRelativePath = savedProjectRelPath,
+            downloadFile = savedDownloadFile
+        )
+    }
+
+    /**
+     * Backwards-compatible overload: builds to cache + Download dir without a
+     * SAF project-folder copy. Kept so existing callers/tests keep compiling.
+     */
+    suspend fun buildWebApkLegacy(
+        context: Context,
+        projectName: String,
+        projectFilesMap: Map<String, ByteArray>,
+        onProgress: (step: Int, totalSteps: Int, stepName: String, logLine: String) -> Unit
+    ): File {
+        return buildWebApk(context, projectName, projectFilesMap, onProgress, null).cacheFile
     }
 
     private fun addFileToZip(zos: ZipOutputStream, file: File, zipPath: String) {

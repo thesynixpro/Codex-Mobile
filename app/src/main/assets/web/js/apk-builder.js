@@ -349,9 +349,12 @@ const ApkBuilder = {
       this.appendLog(`Loaded ${Object.keys(filesMap).length} project files into memory.`, "info");
 
       if (window.Bridge && window.Bridge.isAvailable()) {
+        const rootUri = (window.FileSystem && window.FileSystem.currentProject && window.FileSystem.currentProject.rootUri)
+          ? window.FileSystem.currentProject.rootUri
+          : null;
         const result = await window.Bridge.buildApk(projName, filesMap, (progress) => {
           this.handleBuildProgress(progress);
-        });
+        }, rootUri);
 
         this.handleBuildSuccess(result);
       } else {
@@ -370,10 +373,26 @@ const ApkBuilder = {
   },
 
   handleBuildProgress(progress) {
-    const { step, totalSteps, stepName, logLine } = progress;
+    // Defensive: native/bridge contract mismatches previously delivered
+    // malformed payloads (e.g. JSON strings) which rendered as null/NaN.
+    if (typeof progress === 'string') {
+      try {
+        progress = JSON.parse(progress);
+      } catch (e) {
+        return;
+      }
+    }
+    if (!progress || typeof progress !== 'object') return;
+    let { step, totalSteps, stepName, logLine } = progress;
+    step = Number(step);
+    totalSteps = Number(totalSteps);
+    if (!Number.isFinite(step) || !Number.isFinite(totalSteps) || totalSteps <= 0) return;
+    step = Math.max(1, Math.min(Math.round(step), totalSteps));
 
-    document.getElementById('apk-pipeline-step-name').textContent = stepName;
-    document.getElementById('apk-pipeline-step-count').textContent = `${step} / ${totalSteps}`;
+    const stepNameEl = document.getElementById('apk-pipeline-step-name');
+    if (stepNameEl && stepName) stepNameEl.textContent = stepName;
+    const stepCountEl = document.getElementById('apk-pipeline-step-count');
+    if (stepCountEl) stepCountEl.textContent = `${step} / ${totalSteps}`;
 
     const percent = Math.round((step / totalSteps) * 100);
     const fill = document.getElementById('apk-progress-bar-fill');
@@ -400,6 +419,22 @@ const ApkBuilder = {
   },
 
   handleBuildSuccess(result) {
+    // Normalize: tolerate JSON-string payloads and legacy null fields so the
+    // UI never shows "null" / NaN after a successful build.
+    if (typeof result === 'string') {
+      try {
+        result = JSON.parse(result);
+      } catch (e) {
+        this.handleBuildError('APK build returned an unreadable result. Please rebuild.');
+        return;
+      }
+    }
+    if (!result || typeof result !== 'object' || !result.apkPath) {
+      this.handleBuildError('APK build returned an empty result (null path). Please retry the build.');
+      return;
+    }
+    result.apkName = result.apkName || String(result.apkPath).split('/').pop() || 'app-debug.apk';
+    result.apkSize = Number(result.apkSize) || 0;
     this.lastBuiltApk = result;
 
     // Mark all steps done
@@ -419,14 +454,42 @@ const ApkBuilder = {
     const successCard = document.getElementById('apk-result-success');
     if (successCard) {
       successCard.style.display = 'flex';
-      document.getElementById('apk-result-details').textContent = `${result.apkName} • ${Math.round(result.apkSize / 1024)} KB\nPath: ${result.apkPath}`;
+      const sizeKb = Math.round(result.apkSize / 1024);
+      let details = `${result.apkName} • ${sizeKb} KB\nCache: ${result.apkPath}`;
+      if (result.savedToProject && result.projectRelativePath) {
+        details += `\nSaved in project folder: ${result.projectRelativePath}`;
+      } else if (result.projectRelativePath) {
+        details += `\nProject copy: ${result.projectRelativePath}`;
+      }
+      if (result.downloadPath) {
+        details += `\nDownload copy: ${result.downloadPath}`;
+      }
+      document.getElementById('apk-result-details').textContent = details;
     }
 
     if (window.Terminal) {
       window.Terminal.log(`Successfully built APK: ${result.apkName} (${result.apkPath})`, "system");
+      if (result.savedToProject && result.projectRelativePath) {
+        window.Terminal.log(`APK saved in project folder: ${result.projectRelativePath}`, "system");
+      }
+      if (result.downloadPath) {
+        window.Terminal.log(`APK download copy: ${result.downloadPath}`, "system");
+      }
     }
     if (window.App && window.App.showToast) {
-      window.App.showToast(`APK built: ${result.apkName}`);
+      const suffix = (result.savedToProject && result.projectRelativePath)
+        ? ` — saved in project folder`
+        : '';
+      window.App.showToast(`APK built: ${result.apkName}${suffix}`);
+    }
+
+    // Refresh the project tree so the new APK file appears in the file list.
+    try {
+      if (window.FileSystem && typeof window.FileSystem.refreshProject === 'function') {
+        window.FileSystem.refreshProject();
+      }
+    } catch (e) {
+      console.warn('Could not refresh project after APK build', e);
     }
   },
 
@@ -479,7 +542,10 @@ const ApkBuilder = {
       success: true,
       apkName: `${projName}-debug.apk`,
       apkPath: `/sdcard/Download/${projName}-debug.apk`,
-      apkSize: 1024 * 1450
+      apkSize: 1024 * 1450,
+      savedToProject: false,
+      projectRelativePath: `${projName}-debug.apk (browser demo — download manually)`,
+      downloadPath: `/sdcard/Download/${projName}-debug.apk`
     });
   }
 };
