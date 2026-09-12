@@ -298,9 +298,10 @@ public class MainActivity extends Activity {
  */
 object LauncherIconPng {
 
-    private const val BG = 0xFF1D4ED8.toInt()
-    private const val FG = 0xFFFFFFFF.toInt()
-    private const val ACCENT = 0xFF93C5FD.toInt()
+    // ARGB colors as signed Ints (0xFF1D4ED8, 0xFFFFFFFF, 0xFF93C5FD).
+    private const val BG = -14856488
+    private const val FG = -1
+    private const val ACCENT = -7092739
 
     fun render(sizePx: Int): ByteArray {
         require(sizePx >= 24) { "Icon size too small: $sizePx" }
