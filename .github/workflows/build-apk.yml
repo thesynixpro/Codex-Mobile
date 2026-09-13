@@ -25,20 +25,13 @@ jobs:
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
 
-      - name: Set up Gradle 9.3.1
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-9.3.1-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp
-          echo "/tmp/gradle-9.3.1/bin" >> "$GITHUB_PATH"
-          /tmp/gradle-9.3.1/bin/gradle --version
-
       - name: Create temporary debug keystore
         run: |
-          keytool -genkeypair -v -keystore ./debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+          keytool -genkeypair -v -keystore ./debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Debug, OU=Debug, O=Debug, L=Debug"
           ls -lh ./debug.keystore
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        run: ./gradlew :app:assembleDebug --stacktrace
 
       - name: Verify debug APK exists
         run: |
