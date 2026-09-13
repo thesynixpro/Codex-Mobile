@@ -1,7 +1,8 @@
 {
-  "name": "Codex Mobile",
-  "description": "Mobile-first AI coding IDE featuring in-app web code execution, live preview with console output, custom AI providers (Groq, Mistral, Together, vLLM, LM Studio, Ollama), Android APK build pipeline, Termux toolchain verification, and persistent local AI chat history.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+    "name": "Codex Mobile",
+    "version": "1.0",
+    "description": "A mobile application built with Android and Kotlin",
+    "author": "SynixPro",
+    "created": "2024-01-01",
+    "lastModified": "2024-01-01"
 }
-
