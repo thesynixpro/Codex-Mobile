@@ -25,6 +25,9 @@ jobs:
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Create temporary debug keystore
         run: |
           keytool -genkeypair -v -keystore ./debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Debug, OU=Debug, O=Debug, L=Debug"
