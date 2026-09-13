@@ -37,34 +37,25 @@
 
 set -e
 
+DIRNAME="$(cd "$(dirname "$0")" && pwd -P)"
+DIRNAME="${DIRNAME%/}"
 APP_NAME="Gradle"
-APP_BASE_NAME=$(basename "$0")
-APP_HOME=$(cd "$(dirname "$0")" && pwd -P)
-
-FIND_JAVA_EXE() {
-  local java_exe
-  if [ -n "$JAVA_HOME" ]; then
-    java_exe="$JAVA_HOME"/bin/java
-    if [ ! -x "$java_exe" ]; then
-      echo "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME" >&2
-      return 1
-    fi
-  else
-    java_exe=$(command -v java 2>/dev/null) || {
-      echo "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH." >&2
-      return 1
-    }
-  fi
-  echo "$java_exe"
-}
-
-JAVA_EXE=$(FIND_JAVA_EXE) || exit 1
+APP_BASE_NAME="${0##*/}"
+APP_HOME="$DIRNAME"
+export JAVA_HOME
+export APP_HOME
 
 CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
 export CLASSPATH
 
-exec "$JAVA_EXE" \
-  -Dorg.gradle.appname="$APP_NAME" \
-  -Dorg.gradle.wrapper.properties="$APP_HOME/gradle/wrapper/gradle-wrapper.properties" \
-  -cp "$CLASSPATH" \
-  org.gradle.wrapper.GradleWrapperMain "$@"
+if [ -n "$JAVA_HOME" ]; then
+  JAVA_EXE="$JAVA_HOME"/bin/java
+  if [ ! -x "$JAVA_EXE" ]; then
+    echo "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME" >&2
+    exit 1
+  fi
+else
+  JAVA_EXE=java
+fi
+
+"$JAVA_EXE" -Dorg.gradle.appname="$APP_NAME" -Dorg.gradle.wrapper.properties="$APP_HOME/gradle/wrapper/gradle-wrapper.properties" -cp "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
