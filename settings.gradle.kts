@@ -1,14 +1,9 @@
 pluginManagement {
   repositories {
-    google {
-      content {
-        includeGroupByRegex("com\\.android.*")
-        includeGroupByRegex("com\\.google.*")
-        includeGroupByRegex("androidx.*")
-      }
-    }
-    mavenCentral()
+    // Ensure Gradle can resolve community and Google plugins (KSP is published to Maven/Google)
     gradlePluginPortal()
+    google()
+    mavenCentral()
   }
 }
 
